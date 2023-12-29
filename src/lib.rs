@@ -13,13 +13,16 @@ pub struct StaticVec<T, const N: usize> {
 }
 
 impl<T, const N: usize> StaticVec<T, N> {
-    pub fn new(len: usize) -> Self
+    pub fn new(len: usize) -> Result<Self, StaticVecError>
     where T: Default + Copy,
     {
-        Self {
+        if len > N {
+            return Err(StaticVecError::CapacityExceeded);
+        }
+        Ok(Self {
             data: [T::default();N],
             len,
-        }
+        })
     }
 
     pub fn len(&self) -> usize {
