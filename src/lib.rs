@@ -57,8 +57,9 @@ impl<T, const N: usize> StaticVec<T, N> {
     pub fn try_extend_from_slice(&mut self, other: &[T]) -> Result<(), StaticVecError>
     where T: Copy,
     {
-        self.resize(self.len() + other.len())?;
-        self.data[self.len..].copy_from_slice(other);
+        let old_len = self.len();
+        self.resize(old_len + other.len())?;
+        self.as_mut_slice()[old_len..].copy_from_slice(other);
         Ok(())
     }
 
