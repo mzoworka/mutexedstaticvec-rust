@@ -33,6 +33,11 @@ impl<T, const N: usize> StaticVec<T, N> {
         &self.data[..self.len]
     }
 
+
+    pub fn as_mut_slice(&mut self) -> &mut [T] {
+        &mut self.data[..self.len]
+    }
+
     pub fn iter(&self) -> slice::Iter<'_, T> {
         self.data[..self.len].iter()
     }
