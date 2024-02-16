@@ -9,18 +9,19 @@ pub enum StaticVecError {
 #[derive(Debug, Clone, PartialEq)]
 pub struct StaticVec<T, const N: usize> {
     len: usize,
-    data: [T;N],
+    data: [T; N],
 }
 
 impl<T, const N: usize> StaticVec<T, N> {
     pub fn new(len: usize) -> Result<Self, StaticVecError>
-    where T: Default + Copy,
+    where
+        T: Default + Copy,
     {
         if len > N {
             return Err(StaticVecError::CapacityExceeded);
         }
         Ok(Self {
-            data: [T::default();N],
+            data: [T::default(); N],
             len,
         })
     }
@@ -29,10 +30,13 @@ impl<T, const N: usize> StaticVec<T, N> {
         self.len
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
     pub fn as_slice(&self) -> &[T] {
         &self.data[..self.len]
     }
-
 
     pub fn as_mut_slice(&mut self) -> &mut [T] {
         &mut self.data[..self.len]
@@ -55,7 +59,8 @@ impl<T, const N: usize> StaticVec<T, N> {
     }
 
     pub fn try_extend_from_slice(&mut self, other: &[T]) -> Result<(), StaticVecError>
-    where T: Copy,
+    where
+        T: Copy,
     {
         let old_len = self.len();
         self.resize(old_len + other.len())?;
@@ -63,11 +68,13 @@ impl<T, const N: usize> StaticVec<T, N> {
         Ok(())
     }
 
-    pub fn try_extend_from_iter<I: Iterator<Item = T>>(&mut self, mut iter: I) -> Result<(), StaticVecError>
-    {
-        while let Some(it) = iter.next() {
+    pub fn try_extend_from_iter<I: Iterator<Item = T>>(
+        &mut self,
+        iter: I,
+    ) -> Result<(), StaticVecError> {
+        for it in iter {
             let last_item = self.len();
-            self.resize(last_item+1)?;
+            self.resize(last_item + 1)?;
             unsafe {
                 *self.data.get_unchecked_mut(last_item) = it;
             }
@@ -75,8 +82,12 @@ impl<T, const N: usize> StaticVec<T, N> {
         Ok(())
     }
 
-    pub fn try_extend_from_iter_ref<'a, I: Iterator<Item = &'a T>>(&mut self, iter: I) -> Result<(), StaticVecError>
-    where T: 'a + Clone,
+    pub fn try_extend_from_iter_ref<'a, I: Iterator<Item = &'a T>>(
+        &mut self,
+        iter: I,
+    ) -> Result<(), StaticVecError>
+    where
+        T: 'a + Clone,
     {
         self.try_extend_from_iter(iter.cloned())
     }
@@ -94,27 +105,27 @@ impl<'a, T, const N: usize> IntoIterator for &'a StaticVec<T, N> {
 
 impl<T: Default + Copy, const N: usize> Default for StaticVec<T, N> {
     fn default() -> Self {
-        Self { len: 0, data: [T::default();N] }
+        Self {
+            len: 0,
+            data: [T::default(); N],
+        }
     }
 }
 
-impl<'a, T: Clone, const N: usize> From<&'a [T;N]> for StaticVec<T, N>{
-    fn from(value: &'a[T;N]) -> Self {
-        let this = Self {
+impl<'a, T: Clone, const N: usize> From<&'a [T; N]> for StaticVec<T, N> {
+    fn from(value: &'a [T; N]) -> Self {
+        Self {
             data: value.clone(),
             len: N,
-        };
-
-        this
+        }
     }
 }
 
-impl<T, const N: usize> From<[T;N]> for StaticVec<T, N> {
-    fn from(value: [T;N]) -> Self {
+impl<T, const N: usize> From<[T; N]> for StaticVec<T, N> {
+    fn from(value: [T; N]) -> Self {
         Self {
             data: value,
             len: N,
         }
     }
 }
-
