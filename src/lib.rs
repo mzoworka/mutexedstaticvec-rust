@@ -5,7 +5,7 @@
 #![feature(generic_arg_infer)]
 
 use core::mem::MaybeUninit;
-use core::slice;
+use core::{ptr, slice};
 
 #[derive(Debug, Copy, Clone, PartialEq)]
 pub enum StaticVecError {
@@ -130,6 +130,30 @@ impl<T, const N: usize> StaticVec<T, N> {
         x.resize(A).unwrap();
         x
     }
+
+    pub fn remove(&mut self, index: usize) -> T {
+        let len = self.len;
+
+        assert!(len > 0);
+        assert!(index < len);
+
+        unsafe {
+            // infallible
+            let ret;
+            {
+                // the place we are taking from.
+                let ptr = self.as_mut_ptr().add(index);
+                // copy it out, unsafely having a copy of the value on
+                // the stack and in the vector at the same time.
+                ret = ptr::read(ptr);
+
+                // Shift everything down to fill in that spot.
+                ptr::copy(ptr.add(1), ptr, len - index - 1);
+            }
+            self.len -= 1;
+            ret
+        }
+    }
 }
 
 impl<T, const N: usize> Clone for StaticVec<T, N>
@@ -204,5 +228,27 @@ impl<T, const N: usize> From<[MaybeUninit<T>; N]> for StaticVec<T, N> {
             data: value.map(|x| x),
             len: N,
         }
+    }
+}
+
+impl<T, const N: usize> core::ops::Deref for StaticVec<T, N> {
+    type Target = [T];
+
+    fn deref(&self) -> &Self::Target {
+        self.as_slice()
+    }
+}
+
+impl<T, const N: usize> core::ops::DerefMut for StaticVec<T, N> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.as_mut_slice()
+    }
+}
+
+impl<T, const N: usize> core::ops::Index<usize> for StaticVec<T, N> {
+    type Output = T;
+
+    fn index(&self, index: usize) -> &Self::Output {
+        core::ops::Index::index(&**self, index)
     }
 }
