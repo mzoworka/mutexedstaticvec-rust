@@ -1,5 +1,9 @@
 #![no_std]
+#![allow(incomplete_features)]
 #![feature(maybe_uninit_uninit_array)]
+#![feature(generic_const_exprs)]
+#![feature(generic_arg_infer)]
+
 use core::mem::MaybeUninit;
 use core::slice;
 
@@ -12,6 +16,19 @@ pub enum StaticVecError {
 pub struct StaticVec<T, const N: usize> {
     len: usize,
     data: [MaybeUninit<T>; N],
+}
+
+fn extend_array<T, const A: usize, const N: usize>(a: [T; A]) -> [MaybeUninit<T>; N]
+where
+    T: Clone,
+    [(); N]:,
+    [(); N - A]:,
+{
+    let mut ary = MaybeUninit::uninit_array();
+    for (idx, val) in a.into_iter().enumerate() {
+        ary[idx] = MaybeUninit::new(val);
+    }
+    ary
 }
 
 impl<T, const N: usize> StaticVec<T, N> {
@@ -103,6 +120,16 @@ impl<T, const N: usize> StaticVec<T, N> {
     {
         self.try_extend_from_iter(iter.cloned())
     }
+
+    pub fn from_array<const A: usize>(value: [T; A]) -> Self
+    where
+        T: Clone,
+        [(); N - A]:,
+    {
+        let mut x: Self = extend_array(value).into();
+        x.resize(A).unwrap();
+        x
+    }
 }
 
 impl<T, const N: usize> Clone for StaticVec<T, N>
@@ -166,6 +193,15 @@ impl<T, const N: usize> From<[T; N]> for StaticVec<T, N> {
     fn from(value: [T; N]) -> Self {
         Self {
             data: value.map(|x| MaybeUninit::new(x)),
+            len: N,
+        }
+    }
+}
+
+impl<T, const N: usize> From<[MaybeUninit<T>; N]> for StaticVec<T, N> {
+    fn from(value: [MaybeUninit<T>; N]) -> Self {
+        Self {
+            data: value.map(|x| x),
             len: N,
         }
     }
