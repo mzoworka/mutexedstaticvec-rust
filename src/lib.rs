@@ -122,6 +122,18 @@ where
     }
 }
 
+impl<T, const N: usize> PartialEq for StaticVec<T, N>
+where
+    T: PartialEq,
+{
+    fn eq(&self, other: &Self) -> bool {
+        let a = self.as_slice();
+        let b = other.as_slice();
+
+        self.len == other.len && (*a == *b)
+    }
+}
+
 impl<'a, T, const N: usize> IntoIterator for &'a StaticVec<T, N> {
     type Item = &'a T;
 
