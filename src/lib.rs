@@ -15,6 +15,7 @@ pub enum StaticVecError {
 
 #[derive(Debug)]
 pub struct AtomicStaticVec<T, const N: usize> {
+    write_len: AtomicUsize,
     len: AtomicUsize,
     data: [UnsafeCell<MaybeUninit<T>>; N],
 }
@@ -40,6 +41,7 @@ impl<T, const N: usize> AtomicStaticVec<T, N> {
         Ok(Self {
             data: core::array::from_fn(|_| UnsafeCell::new(MaybeUninit::uninit())),
             len: len.into(),
+            write_len: len.into(),
         })
     }
 
@@ -87,11 +89,11 @@ impl<T, const N: usize> AtomicStaticVec<T, N> {
         }
     }
 
-    fn resize_add(&self, add_len: usize) -> Result<usize, StaticVecError> {
-        self.len
+    fn resize_write_add(&self, add_len: usize) -> Result<usize, StaticVecError> {
+        self.write_len
             .fetch_update(
-                core::sync::atomic::Ordering::SeqCst,
-                core::sync::atomic::Ordering::SeqCst,
+                core::sync::atomic::Ordering::Acquire,
+                core::sync::atomic::Ordering::Acquire,
                 |old_val| {
                     if old_val + add_len > N {
                         None
@@ -103,26 +105,42 @@ impl<T, const N: usize> AtomicStaticVec<T, N> {
             .map_err(|_| StaticVecError::CapacityExceeded)
     }
 
-    fn resize_set(&mut self, new_len: usize) -> Result<(), StaticVecError> {
+    fn resize_set(&mut self, new_len: usize) {
         self.len
             .store(new_len, core::sync::atomic::Ordering::Relaxed);
-        Ok(())
+    }
+
+    fn resize_add_cond(&self, old_len: usize, add_len: usize) {
+        while self
+            .len
+            .compare_exchange(
+                old_len,
+                old_len + add_len,
+                core::sync::atomic::Ordering::Release,
+                core::sync::atomic::Ordering::Acquire,
+            )
+            .is_err()
+        {}
     }
 
     pub fn push(&self, item: T) -> Result<&T, StaticVecError> {
-        let old_len = self.resize_add(1)?;
-        Ok(unsafe {
+        let old_len = self.resize_write_add(1)?;
+        let ret = unsafe {
             let el: &mut MaybeUninit<T> = &mut *self.data.get_unchecked(old_len).get();
             el.write(item)
-        })
+        };
+        self.resize_add_cond(old_len, 1);
+
+        Ok(ret)
     }
 
     pub fn try_extend_from_slice(&mut self, other: &[T]) -> Result<(), StaticVecError>
     where
         T: Copy,
     {
-        let old_len = self.resize_add(other.len())?;
+        let old_len = self.resize_write_add(other.len())?;
         self.as_mut_slice()[old_len..].copy_from_slice(other);
+        self.resize_set(old_len + other.len());
         Ok(())
     }
 
@@ -131,10 +149,11 @@ impl<T, const N: usize> AtomicStaticVec<T, N> {
         iter: I,
     ) -> Result<(), StaticVecError> {
         for it in iter {
-            let last_item = self.resize_add(1)?;
+            let last_item = self.resize_write_add(1)?;
             unsafe {
                 *self.data.get_unchecked_mut(last_item) = MaybeUninit::new(it).into();
             }
+            self.resize_set(last_item + 1);
         }
         Ok(())
     }
@@ -155,7 +174,7 @@ impl<T, const N: usize> AtomicStaticVec<T, N> {
         [(); N - A]:,
     {
         let mut x: Self = extend_array(value).into();
-        let _ = x.resize_set(A);
+        x.resize_set(A);
         x
     }
 
@@ -178,7 +197,7 @@ impl<T, const N: usize> AtomicStaticVec<T, N> {
                 // Shift everything down to fill in that spot.
                 ptr::copy(ptr.add(1), ptr, len - index - 1);
             }
-            let _ = self.resize_set(len - 1);
+            self.resize_set(len - 1);
             ret
         }
     }
@@ -196,6 +215,7 @@ where
         }
         Self {
             len: src.len().into(),
+            write_len: src.len().into(),
             data,
         }
     }
@@ -227,6 +247,7 @@ impl<T, const N: usize> Default for AtomicStaticVec<T, N> {
     fn default() -> Self {
         Self {
             len: 0.into(),
+            write_len: 0.into(),
             data: core::array::from_fn(|_| UnsafeCell::new(MaybeUninit::uninit())),
         }
     }
@@ -237,6 +258,7 @@ impl<'a, T: Clone, const N: usize> From<&'a [T; N]> for AtomicStaticVec<T, N> {
         Self {
             data: value.clone().map(|x| MaybeUninit::new(x).into()),
             len: N.into(),
+            write_len: N.into(),
         }
     }
 }
@@ -246,6 +268,7 @@ impl<T, const N: usize> From<[T; N]> for AtomicStaticVec<T, N> {
         Self {
             data: value.map(|x| MaybeUninit::new(x).into()),
             len: N.into(),
+            write_len: N.into(),
         }
     }
 }
@@ -255,6 +278,7 @@ impl<T, const N: usize> From<[MaybeUninit<T>; N]> for AtomicStaticVec<T, N> {
         Self {
             data: value.map(|x| x.into()),
             len: N.into(),
+            write_len: N.into(),
         }
     }
 }
@@ -264,6 +288,7 @@ impl<T, const N: usize> From<[UnsafeCell<MaybeUninit<T>>; N]> for AtomicStaticVe
         Self {
             data: value,
             len: N.into(),
+            write_len: N.into(),
         }
     }
 }
