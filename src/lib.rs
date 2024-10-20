@@ -3,6 +3,8 @@
 #![feature(generic_const_exprs)]
 #![feature(generic_arg_infer)]
 
+pub mod with_locks;
+
 use core::cell::UnsafeCell;
 use core::mem::MaybeUninit;
 use core::sync::atomic::AtomicUsize;
