@@ -12,7 +12,7 @@ pub trait OptionMutexTrait<'a> {
     type ItemMutex;
     type Guard: DerefMut<Target = Option<Self::Item>>;
 
-    fn get_item_lock(&'a self) -> impl Future<Output = Self::ItemMutex>;
+    fn get_item_lock(&'a self) -> &'a Self::ItemMutex;
     fn lock_item(&'a self) -> impl Future<Output = Self::Guard>;
     fn set_item(&self, val: Option<Self::Item>) -> impl Future<Output = ()>;
     fn take_item(&self) -> impl Future<Output = Option<Self::Item>>;
