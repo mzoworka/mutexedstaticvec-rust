@@ -4,16 +4,18 @@ use crate::AtomicStaticVec;
 
 pub trait KeyTrait {
     type Key: Copy + PartialEq;
-    fn get(&self) -> Self::Key;
+    fn get_key(&self) -> Self::Key;
 }
 
 pub trait OptionMutexTrait<'a> {
     type Item: 'a;
+    type ItemMutex;
     type Guard: DerefMut<Target = Option<Self::Item>>;
 
-    fn lock(&'a self) -> impl Future<Output = Self::Guard>;
-    fn set(&self, val: Option<Self::Item>) -> impl Future<Output = ()>;
-    fn take(&self) -> impl Future<Output = Option<Self::Item>>;
+    fn get_item_lock(&'a self) -> impl Future<Output = Self::ItemMutex>;
+    fn lock_item(&'a self) -> impl Future<Output = Self::Guard>;
+    fn set_item(&self, val: Option<Self::Item>) -> impl Future<Output = ()>;
+    fn take_item(&self) -> impl Future<Output = Option<Self::Item>>;
 }
 
 pub trait RemoveWithLocksTrait {
@@ -34,12 +36,12 @@ where
 
         let last = unsafe {
             let el: &mut MaybeUninit<T> = &mut *self.data.get_unchecked(last_index).get();
-            el.assume_init_mut().take().await
+            el.assume_init_mut().take_item().await
         };
 
         let mut selected = unsafe {
             let el: &mut MaybeUninit<T> = &mut *self.data.get_unchecked(index).get();
-            el.assume_init_mut().lock().await
+            el.assume_init_mut().lock_item().await
         };
 
         *selected = last;
