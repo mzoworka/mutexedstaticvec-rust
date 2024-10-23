@@ -2,13 +2,13 @@
 #![allow(incomplete_features)]
 #![feature(generic_const_exprs)]
 #![feature(generic_arg_infer)]
-
+#[allow(clippy::missing_transmute_annotations)]
 pub mod with_locks;
 
 use core::cell::UnsafeCell;
 use core::mem::MaybeUninit;
-use core::sync::atomic::AtomicUsize;
 use core::{ptr, slice};
+use tokio::sync::Mutex;
 
 #[derive(Debug, Copy, Clone, PartialEq)]
 pub enum StaticVecError {
@@ -16,9 +16,8 @@ pub enum StaticVecError {
 }
 
 #[derive(Debug)]
-pub struct AtomicStaticVec<T, const N: usize> {
-    write_len: AtomicUsize,
-    len: AtomicUsize,
+pub struct MutexedStaticVec<T, const N: usize> {
+    len: Mutex<usize>,
     data: [UnsafeCell<MaybeUninit<T>>; N],
 }
 
@@ -35,7 +34,7 @@ where
     ary
 }
 
-impl<T, const N: usize> AtomicStaticVec<T, N> {
+impl<T, const N: usize> MutexedStaticVec<T, N> {
     pub fn new(len: usize) -> Result<Self, StaticVecError> {
         if len > N {
             return Err(StaticVecError::CapacityExceeded);
@@ -43,145 +42,126 @@ impl<T, const N: usize> AtomicStaticVec<T, N> {
         Ok(Self {
             data: core::array::from_fn(|_| UnsafeCell::new(MaybeUninit::uninit())),
             len: len.into(),
-            write_len: len.into(),
         })
     }
 
-    pub fn len(&self) -> usize {
-        self.len.load(core::sync::atomic::Ordering::Relaxed)
+    pub async fn len(&self) -> usize {
+        *self.len.lock().await
     }
 
-    pub fn is_empty(&self) -> bool {
-        self.len.load(core::sync::atomic::Ordering::Relaxed) == 0
+    pub async fn is_empty(&self) -> bool {
+        *self.len.lock().await == 0
     }
 
-    pub fn as_slice(&self) -> &[T] {
+    pub async fn as_slice(&self) -> &[T] {
         //safe as we ensure that 0..len elements are initialized
         unsafe {
-            core::mem::transmute::<_, &[T]>(
-                &self.data[..self.len.load(core::sync::atomic::Ordering::Relaxed)],
+            core::mem::transmute::<&[core::cell::UnsafeCell<core::mem::MaybeUninit<T>>], &[T]>(
+                &self.data[..*self.len.lock().await],
             )
         }
     }
 
-    pub fn as_mut_slice(&mut self) -> &mut [T] {
+    pub async fn as_mut_slice(&mut self) -> &mut [T] {
         //safe as we ensure that 0..len elements are initialized
         unsafe {
-            core::mem::transmute::<_, &mut [T]>(
-                &mut self.data[..self.len.load(core::sync::atomic::Ordering::Relaxed)],
+            core::mem::transmute::<&mut [core::cell::UnsafeCell<core::mem::MaybeUninit<T>>], &mut [T]>(
+                &mut self.data[..*self.len.lock().await],
             )
         }
     }
 
-    pub fn iter(&self) -> slice::Iter<'_, T> {
+    pub async fn iter(&self) -> slice::Iter<'_, T> {
         //safe as we ensure that 0..len elements are initialized
         unsafe {
-            core::mem::transmute::<_, core::slice::Iter<'_, T>>(
-                self.data[..self.len.load(core::sync::atomic::Ordering::Relaxed)].iter(),
-            )
+            core::mem::transmute::<
+                core::slice::Iter<'_, core::cell::UnsafeCell<core::mem::MaybeUninit<T>>>,
+                core::slice::Iter<'_, T>,
+            >(self.data[..*self.len.lock().await].iter())
         }
     }
 
-    pub fn iter_mut(&mut self) -> slice::IterMut<'_, T> {
+    pub async fn iter_mut(&mut self) -> slice::IterMut<'_, T> {
         //safe as we ensure that 0..len elements are initialized
         unsafe {
-            core::mem::transmute::<_, core::slice::IterMut<'_, T>>(
-                self.data[..self.len.load(core::sync::atomic::Ordering::Relaxed)].iter_mut(),
-            )
+            core::mem::transmute::<
+                core::slice::IterMut<'_, core::cell::UnsafeCell<core::mem::MaybeUninit<T>>>,
+                core::slice::IterMut<'_, T>,
+            >(self.data[..*self.len.lock().await].iter_mut())
         }
     }
 
-    fn resize_write_add(&self, add_len: usize) -> Result<usize, StaticVecError> {
-        self.write_len
-            .fetch_update(
-                core::sync::atomic::Ordering::Acquire,
-                core::sync::atomic::Ordering::Acquire,
-                |old_val| {
-                    if old_val + add_len > N {
-                        None
-                    } else {
-                        Some(old_val + add_len)
-                    }
-                },
-            )
-            .map_err(|_| StaticVecError::CapacityExceeded)
+    async fn resize_set(&mut self, new_len: usize) {
+        *self.len.lock().await = new_len;
     }
 
-    fn resize_set(&mut self, new_len: usize) {
-        self.len
-            .store(new_len, core::sync::atomic::Ordering::Relaxed);
-    }
-
-    fn resize_add_cond(&self, old_len: usize, add_len: usize) {
-        while self
-            .len
-            .compare_exchange(
-                old_len,
-                old_len + add_len,
-                core::sync::atomic::Ordering::Release,
-                core::sync::atomic::Ordering::Acquire,
-            )
-            .is_err()
-        {}
-    }
-
-    pub fn push(&self, item: T) -> Result<&T, StaticVecError> {
-        let old_len = self.resize_write_add(1)?;
+    pub async fn push(&self, item: T) -> Result<&T, StaticVecError> {
+        let mut len_locked = self.len.lock().await;
+        let old_len = *len_locked;
         let ret = unsafe {
             let el: &mut MaybeUninit<T> = &mut *self.data.get_unchecked(old_len).get();
             el.write(item)
         };
-        self.resize_add_cond(old_len, 1);
+        *len_locked = old_len + 1;
 
         Ok(ret)
     }
 
-    pub fn try_extend_from_slice(&mut self, other: &[T]) -> Result<(), StaticVecError>
+    pub async fn try_extend_from_slice(&mut self, other: &[T]) -> Result<(), StaticVecError>
     where
         T: Copy,
     {
-        let old_len = self.resize_write_add(other.len())?;
-        self.as_mut_slice()[old_len..].copy_from_slice(other);
-        self.resize_set(old_len + other.len());
+        let mut len_locked = self.len.lock().await;
+        let old_len = *len_locked;
+        let slice = unsafe {
+            core::mem::transmute::<&mut [core::cell::UnsafeCell<core::mem::MaybeUninit<T>>], &mut [T]>(
+                &mut self.data[..old_len],
+            )
+        };
+        slice[old_len..].copy_from_slice(other);
+        *len_locked = old_len + other.len();
         Ok(())
     }
 
-    pub fn try_extend_from_iter<I: Iterator<Item = T>>(
+    pub async fn try_extend_from_iter<I: Iterator<Item = T>>(
         &mut self,
         iter: I,
     ) -> Result<(), StaticVecError> {
+        let mut len_locked = self.len.lock().await;
+        let mut last_item = *len_locked;
         for it in iter {
-            let last_item = self.resize_write_add(1)?;
             unsafe {
                 *self.data.get_unchecked_mut(last_item) = MaybeUninit::new(it).into();
             }
-            self.resize_set(last_item + 1);
+            last_item += 1;
         }
+        *len_locked = last_item;
         Ok(())
     }
 
-    pub fn try_extend_from_iter_ref<'a, I: Iterator<Item = &'a T>>(
+    pub async fn try_extend_from_iter_ref<'a, I: Iterator<Item = &'a T>>(
         &mut self,
         iter: I,
     ) -> Result<(), StaticVecError>
     where
         T: 'a + Clone,
     {
-        self.try_extend_from_iter(iter.cloned())
+        self.try_extend_from_iter(iter.cloned()).await
     }
 
-    pub fn from_array<const A: usize>(value: [T; A]) -> Self
+    pub async fn from_array<const A: usize>(value: [T; A]) -> Self
     where
         T: Clone,
         [(); N - A]:,
     {
         let mut x: Self = extend_array(value).into();
-        x.resize_set(A);
+        x.resize_set(A).await;
         x
     }
 
-    pub fn remove(&mut self, index: usize) -> T {
-        let len = self.len.load(core::sync::atomic::Ordering::Relaxed);
+    pub async fn remove(&mut self, index: usize) -> T {
+        let mut len_locked = self.len.lock().await;
+        let len = *len_locked;
 
         assert!(len > 0);
         assert!(index < len);
@@ -191,128 +171,61 @@ impl<T, const N: usize> AtomicStaticVec<T, N> {
             let ret;
             {
                 // the place we are taking from.
-                let ptr = self.as_mut_ptr().add(index);
+                let ptr = self.data.as_mut_ptr().add(index);
                 // copy it out, unsafely having a copy of the value on
                 // the stack and in the vector at the same time.
-                ret = ptr::read(ptr);
+                ret = ptr::read(ptr).into_inner().assume_init();
 
                 // Shift everything down to fill in that spot.
                 ptr::copy(ptr.add(1), ptr, len - index - 1);
             }
-            self.resize_set(len - 1);
+            *len_locked = len - 1;
             ret
         }
     }
 }
 
-impl<T, const N: usize> Clone for AtomicStaticVec<T, N>
-where
-    T: Clone,
-{
-    fn clone(&self) -> Self {
-        let src = self.as_slice();
-        let mut data = core::array::from_fn(|_| UnsafeCell::new(MaybeUninit::uninit()));
-        for i in 0..src.len() {
-            data[i] = MaybeUninit::new(src[i].clone()).into();
-        }
-        Self {
-            len: src.len().into(),
-            write_len: src.len().into(),
-            data,
-        }
-    }
-}
-
-impl<T, const N: usize> PartialEq for AtomicStaticVec<T, N>
-where
-    T: PartialEq,
-{
-    fn eq(&self, other: &Self) -> bool {
-        let a = self.as_slice();
-        let b = other.as_slice();
-
-        a.len() == b.len() && (*a == *b)
-    }
-}
-
-impl<'a, T, const N: usize> IntoIterator for &'a AtomicStaticVec<T, N> {
-    type Item = &'a T;
-
-    type IntoIter = slice::Iter<'a, T>;
-
-    fn into_iter(self) -> Self::IntoIter {
-        self.iter()
-    }
-}
-
-impl<T, const N: usize> Default for AtomicStaticVec<T, N> {
+impl<T, const N: usize> Default for MutexedStaticVec<T, N> {
     fn default() -> Self {
         Self {
             len: 0.into(),
-            write_len: 0.into(),
             data: core::array::from_fn(|_| UnsafeCell::new(MaybeUninit::uninit())),
         }
     }
 }
 
-impl<'a, T: Clone, const N: usize> From<&'a [T; N]> for AtomicStaticVec<T, N> {
+impl<'a, T: Clone, const N: usize> From<&'a [T; N]> for MutexedStaticVec<T, N> {
     fn from(value: &'a [T; N]) -> Self {
         Self {
             data: value.clone().map(|x| MaybeUninit::new(x).into()),
             len: N.into(),
-            write_len: N.into(),
         }
     }
 }
 
-impl<T, const N: usize> From<[T; N]> for AtomicStaticVec<T, N> {
+impl<T, const N: usize> From<[T; N]> for MutexedStaticVec<T, N> {
     fn from(value: [T; N]) -> Self {
         Self {
             data: value.map(|x| MaybeUninit::new(x).into()),
             len: N.into(),
-            write_len: N.into(),
         }
     }
 }
 
-impl<T, const N: usize> From<[MaybeUninit<T>; N]> for AtomicStaticVec<T, N> {
+impl<T, const N: usize> From<[MaybeUninit<T>; N]> for MutexedStaticVec<T, N> {
     fn from(value: [MaybeUninit<T>; N]) -> Self {
         Self {
             data: value.map(|x| x.into()),
             len: N.into(),
-            write_len: N.into(),
         }
     }
 }
 
-impl<T, const N: usize> From<[UnsafeCell<MaybeUninit<T>>; N]> for AtomicStaticVec<T, N> {
+impl<T, const N: usize> From<[UnsafeCell<MaybeUninit<T>>; N]> for MutexedStaticVec<T, N> {
     fn from(value: [UnsafeCell<MaybeUninit<T>>; N]) -> Self {
         Self {
             data: value,
             len: N.into(),
-            write_len: N.into(),
         }
-    }
-}
-
-impl<T, const N: usize> core::ops::Deref for AtomicStaticVec<T, N> {
-    type Target = [T];
-
-    fn deref(&self) -> &Self::Target {
-        self.as_slice()
-    }
-}
-
-impl<T, const N: usize> core::ops::DerefMut for AtomicStaticVec<T, N> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        self.as_mut_slice()
-    }
-}
-
-impl<T, const N: usize> core::ops::Index<usize> for AtomicStaticVec<T, N> {
-    type Output = T;
-
-    fn index(&self, index: usize) -> &Self::Output {
-        core::ops::Index::index(&**self, index)
     }
 }

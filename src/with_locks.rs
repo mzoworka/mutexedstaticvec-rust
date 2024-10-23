@@ -1,6 +1,6 @@
 use core::{future::Future, mem::MaybeUninit, ops::DerefMut};
 
-use crate::AtomicStaticVec;
+use crate::MutexedStaticVec;
 
 pub trait KeyTrait {
     type Key: Copy + PartialEq;
@@ -18,32 +18,83 @@ pub trait OptionMutexTrait<'a> {
     fn take_item(&self) -> impl Future<Output = Option<Self::Item>>;
 }
 
-pub trait RemoveWithLocksTrait {
-    fn remove_with_locks(&self, index: usize) -> impl Future<Output = ()>;
+pub trait RemoveWithLocksTrait<'a, T: KeyTrait + OptionMutexTrait<'a>> {
+    fn remove_with_locks<
+        KP: Fn(&T::Key) -> bool,
+        IP: Fn(&<T as OptionMutexTrait<'_>>::Item) -> bool,
+    >(
+        &self,
+        key_pred: KP,
+        item_pred: IP,
+    ) -> impl Future<Output = bool>;
 }
 
-impl<T, const N: usize> RemoveWithLocksTrait for AtomicStaticVec<T, N>
+impl<'a, T, const N: usize> RemoveWithLocksTrait<'a, T> for MutexedStaticVec<T, N>
 where
-    T: KeyTrait + for<'a> OptionMutexTrait<'a>,
+    T: KeyTrait + OptionMutexTrait<'a> + 'a,
 {
-    async fn remove_with_locks(&self, index: usize) {
-        let len = self.len.fetch_sub(1, core::sync::atomic::Ordering::Acquire);
+    async fn remove_with_locks<
+        KP: Fn(&T::Key) -> bool,
+        IP: Fn(&<T as OptionMutexTrait<'_>>::Item) -> bool,
+    >(
+        &self,
+        key_pred: KP,
+        item_pred: IP,
+    ) -> bool {
+        let mut len_locked = self.len.lock().await;
+        let len = *len_locked;
 
         assert!(len > 0);
-        assert!(index < len);
 
-        let last_index = len - 1;
+        for i in 0..len {
+            let last_index = len - 1;
+            let item = unsafe { (*self.data.get_unchecked(i).get()).assume_init_ref() };
+            if !key_pred(&item.get_key()) {
+                continue;
+            }
 
-        let last = unsafe {
-            let el: &mut MaybeUninit<T> = &mut *self.data.get_unchecked(last_index).get();
-            el.assume_init_mut().take_item().await
-        };
+            if i != last_index {
+                let mut selected = unsafe {
+                    let el: &mut MaybeUninit<T> = &mut *self.data.get_unchecked(i).get();
+                    el.assume_init_mut().lock_item().await
+                };
 
-        let mut selected = unsafe {
-            let el: &mut MaybeUninit<T> = &mut *self.data.get_unchecked(index).get();
-            el.assume_init_mut().lock_item().await
-        };
+                match selected.as_ref() {
+                    Some(item) => {
+                        if !item_pred(item) {
+                            continue;
+                        }
+                    }
+                    None => continue,
+                }
 
-        *selected = last;
+                let last = unsafe {
+                    let el: &mut MaybeUninit<T> = &mut *self.data.get_unchecked(last_index).get();
+                    el.assume_init_mut().take_item().await
+                };
+
+                *selected = last;
+            } else {
+                let mut selected = unsafe {
+                    let el: &mut MaybeUninit<T> = &mut *self.data.get_unchecked(i).get();
+                    el.assume_init_mut().lock_item().await
+                };
+
+                match selected.as_ref() {
+                    Some(item) => {
+                        if !item_pred(item) {
+                            continue;
+                        }
+                    }
+                    None => continue,
+                }
+
+                *selected = None;
+            }
+
+            *len_locked = len - 1;
+        }
+
+        false
     }
 }
