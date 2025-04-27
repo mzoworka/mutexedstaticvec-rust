@@ -5,6 +5,7 @@ use crate::MutexedStaticVec;
 pub trait KeyTrait {
     type Key: Copy + PartialEq;
     fn get_key(&self) -> Self::Key;
+    fn set_key(&mut self, key: Self::Key);
 }
 
 pub trait OptionMutexTrait<'a> {
@@ -54,26 +55,34 @@ where
             }
 
             if i != last_index {
-                let mut selected = unsafe {
-                    let el: &mut MaybeUninit<T> = &mut *self.data.get_unchecked(i).get();
-                    el.assume_init_mut().lock_item().await
-                };
+                let last_key = {
+                    let mut selected = unsafe {
+                        let el: &mut MaybeUninit<T> = &mut *self.data.get_unchecked(i).get();
+                        el.assume_init_mut().lock_item().await
+                    };
 
-                match selected.as_ref() {
-                    Some(item) => {
-                        if !item_pred(item) {
-                            continue;
+                    match selected.as_ref() {
+                        Some(item) => {
+                            if !item_pred(item) {
+                                continue;
+                            }
                         }
+                        None => continue,
                     }
-                    None => continue,
-                }
 
-                let last = unsafe {
-                    let el: &mut MaybeUninit<T> = &mut *self.data.get_unchecked(last_index).get();
-                    el.assume_init_mut().take_item().await
+                    let (last, last_key) = unsafe {
+                        let el: &mut MaybeUninit<T> = &mut *self.data.get_unchecked(last_index).get();
+                        (el.assume_init_mut().take_item().await, el.assume_init_mut().get_key())
+                    };
+
+                    *selected = last;
+                    last_key
                 };
-
-                *selected = last;
+                let selected_parent = unsafe {
+                    let el: &mut MaybeUninit<T> = &mut *self.data.get_unchecked(i).get();
+                    el.assume_init_mut()
+                };
+                selected_parent.set_key(last_key);
             } else {
                 let mut selected = unsafe {
                     let el: &mut MaybeUninit<T> = &mut *self.data.get_unchecked(i).get();
