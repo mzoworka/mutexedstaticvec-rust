@@ -45,8 +45,6 @@ where
         let mut len_locked = self.len.lock().await;
         let len = *len_locked;
 
-        assert!(len > 0);
-
         for i in 0..len {
             let last_index = len - 1;
             let item = unsafe { (*self.data.get_unchecked(i).get()).assume_init_ref() };
