@@ -1,7 +1,6 @@
 #![no_std]
 #![allow(incomplete_features)]
 #![feature(generic_const_exprs)]
-#![feature(generic_arg_infer)]
 #[allow(clippy::missing_transmute_annotations)]
 pub mod with_locks;
 
@@ -55,7 +54,7 @@ impl<T, const N: usize> MutexedStaticVec<T, N> {
     }
 
     pub async fn as_slice(&self) -> &[T] {
-        //safe as we ensure that 0..len elements are initialized
+        #[allow(unsafe_code)] //safe as we ensure that 0..len elements are initialized
         unsafe {
             core::mem::transmute::<&[core::cell::UnsafeCell<core::mem::MaybeUninit<T>>], &[T]>(
                 &self.data[..*self.len.lock().await],
@@ -64,7 +63,7 @@ impl<T, const N: usize> MutexedStaticVec<T, N> {
     }
 
     pub async fn as_mut_slice(&mut self) -> &mut [T] {
-        //safe as we ensure that 0..len elements are initialized
+        #[allow(unsafe_code)] //safe as we ensure that 0..len elements are initialized
         unsafe {
             core::mem::transmute::<&mut [core::cell::UnsafeCell<core::mem::MaybeUninit<T>>], &mut [T]>(
                 &mut self.data[..*self.len.lock().await],
@@ -73,7 +72,7 @@ impl<T, const N: usize> MutexedStaticVec<T, N> {
     }
 
     pub async fn iter(&self) -> slice::Iter<'_, T> {
-        //safe as we ensure that 0..len elements are initialized
+        #[allow(unsafe_code)] //safe as we ensure that 0..len elements are initialized
         unsafe {
             core::mem::transmute::<
                 core::slice::Iter<'_, core::cell::UnsafeCell<core::mem::MaybeUninit<T>>>,
@@ -83,7 +82,7 @@ impl<T, const N: usize> MutexedStaticVec<T, N> {
     }
 
     pub async fn iter_mut(&mut self) -> slice::IterMut<'_, T> {
-        //safe as we ensure that 0..len elements are initialized
+        #[allow(unsafe_code)] //safe as we ensure that 0..len elements are initialized
         unsafe {
             core::mem::transmute::<
                 core::slice::IterMut<'_, core::cell::UnsafeCell<core::mem::MaybeUninit<T>>>,
@@ -99,6 +98,7 @@ impl<T, const N: usize> MutexedStaticVec<T, N> {
     pub async fn push(&self, item: T) -> Result<&T, StaticVecError> {
         let mut len_locked = self.len.lock().await;
         let old_len = *len_locked;
+        #[allow(unsafe_code)] //safe as we ensure that 0..len elements are valid
         let ret = unsafe {
             let el: &mut MaybeUninit<T> = &mut *self.data.get_unchecked(old_len).get();
             el.write(item)
@@ -114,6 +114,7 @@ impl<T, const N: usize> MutexedStaticVec<T, N> {
     {
         let mut len_locked = self.len.lock().await;
         let old_len = *len_locked;
+        #[allow(unsafe_code)] //safe as we ensure that 0..len elements are valid
         let slice = unsafe {
             core::mem::transmute::<&mut [core::cell::UnsafeCell<core::mem::MaybeUninit<T>>], &mut [T]>(
                 &mut self.data[..old_len],
@@ -131,6 +132,10 @@ impl<T, const N: usize> MutexedStaticVec<T, N> {
         let mut len_locked = self.len.lock().await;
         let mut last_item = *len_locked;
         for it in iter {
+            if last_item >= N {
+                return Err(StaticVecError::CapacityExceeded);
+            }
+            #[allow(unsafe_code)] //safe as we ensure that 0..len elements are valid
             unsafe {
                 *self.data.get_unchecked_mut(last_item) = MaybeUninit::new(it).into();
             }
@@ -167,6 +172,7 @@ impl<T, const N: usize> MutexedStaticVec<T, N> {
         assert!(len > 0);
         assert!(index < len);
 
+        #[allow(unsafe_code)] //safe as we ensure that index is initialized (0..len)
         unsafe {
             // infallible
             let ret;

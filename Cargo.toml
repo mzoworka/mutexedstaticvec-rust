@@ -1,9 +1,22 @@
 [package]
 name = "mutexedstaticvec"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
+license = "MIT"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-tokio = { version = "1.35.0", features = [ "sync" ] }
+tokio = { version = "1.35.0", features = ["sync"] }
+
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+enum_glob_use = "deny"
+pedantic = { level = "allow", priority = -1 }
+nursery = { level = "allow", priority = -1 }
+module_name_repetitions = "allow"
+unreadable_literal = "allow"

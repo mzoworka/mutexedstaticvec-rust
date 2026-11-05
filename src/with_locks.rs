@@ -47,6 +47,7 @@ where
 
         for i in 0..len {
             let last_index = len - 1;
+            #[allow(unsafe_code)] //safe as we ensure that 0..len elements are initialized
             let item = unsafe { (*self.data.get_unchecked(i).get()).assume_init_ref() };
             if !key_pred(&item.get_key()) {
                 continue;
@@ -54,6 +55,7 @@ where
 
             if i != last_index {
                 let last_key = {
+                    #[allow(unsafe_code)] //safe as we ensure that 0..len elements are initialized
                     let mut selected = unsafe {
                         let el: &mut MaybeUninit<T> = &mut *self.data.get_unchecked(i).get();
                         el.assume_init_mut().lock_item().await
@@ -68,20 +70,27 @@ where
                         None => continue,
                     }
 
+                    #[allow(unsafe_code)] //safe as we ensure that 0..len elements are initialized
                     let (last, last_key) = unsafe {
-                        let el: &mut MaybeUninit<T> = &mut *self.data.get_unchecked(last_index).get();
-                        (el.assume_init_mut().take_item().await, el.assume_init_mut().get_key())
+                        let el: &mut MaybeUninit<T> =
+                            &mut *self.data.get_unchecked(last_index).get();
+                        (
+                            el.assume_init_mut().take_item().await,
+                            el.assume_init_mut().get_key(),
+                        )
                     };
 
                     *selected = last;
                     last_key
                 };
+                #[allow(unsafe_code)] //safe as we ensure that 0..len elements are initialized
                 let selected_parent = unsafe {
                     let el: &mut MaybeUninit<T> = &mut *self.data.get_unchecked(i).get();
                     el.assume_init_mut()
                 };
                 selected_parent.set_key(last_key);
             } else {
+                #[allow(unsafe_code)] //safe as we ensure that 0..len elements are initialized
                 let mut selected = unsafe {
                     let el: &mut MaybeUninit<T> = &mut *self.data.get_unchecked(i).get();
                     el.assume_init_mut().lock_item().await
